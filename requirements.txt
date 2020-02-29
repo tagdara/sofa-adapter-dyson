@@ -1,1 +1,1 @@
-libpurecoollink
+https://github.com/etheralm/libpurecool.git

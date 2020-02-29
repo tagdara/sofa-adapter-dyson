@@ -19,9 +19,9 @@ import base64
 import uuid
 import logging
 
-from libpurecoollink.dyson import DysonAccount
-from libpurecoollink.const import FanSpeed, FanMode, NightMode, Oscillation, FanState, StandbyMonitoring, QualityTarget, ResetFilter, HeatMode, FocusMode, HeatTarget
-from libpurecoollink.dyson_pure_state import DysonPureHotCoolState, DysonPureCoolState, DysonEnvironmentalSensorState
+from libpurecool.dyson import DysonAccount
+from libpurecool.const import FanSpeed, FanMode, NightMode, Oscillation, FanState, StandbyMonitoring, QualityTarget, ResetFilter, HeatMode, FocusMode, HeatTarget
+from libpurecool.dyson_pure_state import DysonPureHotCoolState, DysonPureCoolState, DysonEnvironmentalSensorState
         
 class dyson(sofabase):
 
@@ -140,7 +140,7 @@ class dyson(sofabase):
             self.logged_in=False
             self.connected=False
             self.running=True
-            self.log.info('Loggers: %s' % logging.root.manager.loggerDict)
+            #self.log.info('Loggers: %s' % logging.root.manager.loggerDict)
             logging.getLogger('libpurecoollink').setLevel(logging.DEBUG)
             logging.getLogger('libpurecoollink.dyson_device').setLevel(logging.DEBUG)
             if not loop:
@@ -232,7 +232,7 @@ class dyson(sofabase):
                                 devconfig['state']=await self.getFanProperties(self.dyson_devices[0])
                                 await self.dataset.ingest({'fan': {device.name+" fan": devconfig}})
                     else:
-                        self.log.warn('!! Warning - not logged in after connect')
+                        self.log.warn('!! Warning - not logged in after connect: %s' % self.account._password)
             except:
                 self.log.error('Error', exc_info=True)
 
