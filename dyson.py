@@ -79,6 +79,9 @@ class dyson(sofabase):
 
         @property            
         def temperature(self):
+            tempval=int(self.adapter.ktof(int(self.nativeObject['state']['temperature'])))
+            if tempval<0:
+                self.log.error('!! error reporting negative temperature: %s %s' % (tempval,self.nativeObject['state']['temperature']))
             return int(self.adapter.ktof(int(self.nativeObject['state']['temperature'])))
                
     class ThermostatController(devices.ThermostatController):
@@ -101,6 +104,7 @@ class dyson(sofabase):
 
         async def SetThermostatMode(self, payload, correlationToken='', **kwargs):
             try:
+                self.log.info('payload: %s' % payload)
                 # Dyson mappings are weird because of full AUTO vs fan AUTO so this logic helps to sort it out
                 if payload['thermostatMode']['value']=='AUTO':
                     command={ 'fan_mode': FanMode.AUTO, 'heat_mode': HeatMode.HEAT_OFF }
@@ -123,7 +127,21 @@ class dyson(sofabase):
                 self.log.error('!! Error during SetThermostatMode', exc_info=True)
                 return None
 
+    class AirQualityModeController(devices.ModeController):
 
+        @property            
+        def mode(self):
+            try:
+                air_quality=int(self.nativeObject['state']['volatil_organic_compounds'])
+                if air_quality>7:
+                    return "Poor"
+                if air_quality>3:
+                    return "Fair"
+                else:
+                    return "Good"
+            except:
+                self.adapter.log.error('Error checking air quality status', exc_info=True)
+            return ""
 
     class adapterProcess(adapterbase):
     
@@ -140,6 +158,10 @@ class dyson(sofabase):
             self.logged_in=False
             self.connected=False
             self.running=True
+            # If you set the below line to true, it will poll data directly on the polltime interval.  This is generally not necessary
+            # as the callback mechanism would report any changes without data polling.  
+            self.manual_poll=False
+            
             #self.log.info('Loggers: %s' % logging.root.manager.loggerDict)
             logging.getLogger('libpurecoollink').setLevel(logging.DEBUG)
             logging.getLogger('libpurecoollink.dyson_device').setLevel(logging.DEBUG)
@@ -162,9 +184,9 @@ class dyson(sofabase):
             
             try:
                 self.pendingChanges=[]
-                #self.log.info('-> %s' % msg)
+                #self.log.info('-> %s' % dir(msg))
                 newstate={}
-                allprops=['humidity','temperature','dust','sleep_timer',"fan_mode", "fan_state", "night_mode", "speed", "oscillation", "filter_life", "quality_target", "standby_monitoring", "tilt", "focus_mode", "heat_mode", "heat_target", "heat_state"]
+                allprops=['volatil_organic_compounds','humidity','temperature','dust','sleep_timer',"fan_mode", "fan_state", "night_mode", "speed", "oscillation", "filter_life", "quality_target", "standby_monitoring", "tilt", "focus_mode", "heat_mode", "heat_target", "heat_state"]
                 props=filter(lambda a: not a.startswith('_'), dir(msg))
                 for prop in props:
                     if prop in allprops:
@@ -242,10 +264,38 @@ class dyson(sofabase):
                 try:
                     if not self.logged_in:
                         await self.connect_dyson()
+                    else:
+                        if self.manual_poll:
+                            await self.getDysonDevices()
                     await asyncio.sleep(self.polltime)
                 except:
                     self.log.error('Error fetching Dyson Data', exc_info=True)
                     self.logged_in=False
+
+        async def getDysonDevices(self):
+            
+            try:
+                if self.logged_in:
+                    for device in self.dyson_devices:
+                        devconfig={}
+                        settings=["serial","active","name","version","auto_update","new_version_available","product_type","network_device"]
+                        for setting in settings:
+                            if setting=="name":
+                                devconfig[setting]=getattr(device,setting)+" fan"
+                            elif setting=="network_device":
+                                netdev=getattr(device,setting)
+                                devconfig[setting]={ "port": netdev.port, "address": netdev.address, "name": netdev.name}
+                                #self.log.info('Network device: %s' % dir(getattr(device,setting)))
+                            else:
+                                devconfig[setting]=getattr(device,setting)
+
+                        if self.connected:
+                            devconfig['state']=await self.getFanProperties(self.dyson_devices[0])
+                            self.log.info('Updating: %s' % devconfig)
+                            #devconfig['state']['network_device']=""
+                            await self.dataset.ingest({'fan': {device.name+" fan": devconfig}})
+            except:
+                self.log.error('!! error updating dyson devices', exc_info=True)
 
         async def setDyson(self, device, command):
             #devices[0].set_configuration(heat_mode=HeatMode.HEAT_ON, heat_target=HeatTarget.fahrenheit(80), fan_speed=FanSpeed.FAN_SPEED_5)
@@ -288,6 +338,9 @@ class dyson(sofabase):
                         device.TemperatureSensor=dyson.TemperatureSensor(device=device)
                         device.PowerLevelController=dyson.PowerLevelController(device=device)
                         device.EndpointHealth=dyson.EndpointHealth(device=device)
+                        device.AirQualityModeController=dyson.AirQualityModeController('Air Quality', device=device, 
+                            supportedModes={'Good':'Good', 'Fair':'Fair', 'Poor': 'Poor'})
+
                         return self.dataset.newaddDevice(device)
 
             except:
@@ -307,7 +360,7 @@ class dyson(sofabase):
                 for setting in settings:
                     devstate[setting]=getattr(self.dyson_devices[0].state,setting)
                                 
-                settings=['humidity','temperature','dust','sleep_timer']
+                settings=['volatil_organic_compounds','humidity','temperature','dust','sleep_timer']
                 for setting in settings:                            
                     devstate[setting]=getattr(envstate,setting)
                     
