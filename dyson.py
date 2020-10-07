@@ -35,7 +35,8 @@ class dyson(sofabase):
             self.device_serial_number='-'.join(self.device_id.split('-')[1:4])
             self.device_model=self.device_id.split('-')[-1]
             self.device_friendly_name=self.set_or_default('device_friendly_name', mandatory=True) 
-            self.device_password=self.set_or_default('device_password', mandatory=True) 
+            self.device_password=self.set_or_default('device_password', mandatory=True)
+            self.poll_time=self.set_or_default('poll_time', default=30)
 
 
     class EndpointHealth(devices.EndpointHealth):
@@ -134,7 +135,7 @@ class dyson(sofabase):
                     command={ 'fmod': 'AUTO', 'hmod': 'OFF' }
                 elif payload['thermostatMode']['value']=='HEAT':
                     #command={ 'fan_mode': FanMode.FAN, 'heat_mode': HeatMode.HEAT_ON }
-                    command={ 'fmod': 'AUTO', 'hmod': 'ON' }
+                    command={ 'fmod': 'AUTO', 'hmod': 'HEAT' }
                 elif payload['thermostatMode']['value'] in ['FAN', 'COOL']:
                     #command={ 'fan_mode': FanMode.FAN, 'heat_mode': HeatMode.HEAT_OFF }
                     command={ 'fmod': 'FAN', 'hmod': 'OFF' }
@@ -165,7 +166,7 @@ class dyson(sofabase):
                     #air_quality=int(self.nativeObject['state']['volatil_organic_compounds'])
                     if self.nativeObject['data']['vact']=='INIT':
                         return ""
-                    air_quality=int(self.nativeObject['data']['vact'])
+                    air_quality=max( int(self.nativeObject['data']['pact']), int(self.nativeObject['data']['vact']))
                     if air_quality>7:
                         return "Poor"
                     if air_quality>3:
@@ -216,6 +217,26 @@ class dyson(sofabase):
 
         async def start(self):
             self.log.info('.. Starting Dyson')
+            self.polling_task = asyncio.create_task(self.poll_dyson())
+            
+            
+        async def poll_dyson(self):
+            self.log.info(".. polling loop every %s seconds for bridge data" % self.config.poll_time)
+            while True:
+                try:
+                    #self.log.info("Polling bridge data")
+                    self.request_current_state()
+                except:
+                    self.log.error('Error fetching Dyson data', exc_info=True)
+                
+                await asyncio.sleep(self.config.poll_time)
+                
+        def request_current_state(self):
+            try:
+                payload = { "msg" : "REQUEST-CURRENT-STATE", "time" : strftime("%Y-%m-%dT%H:%M:%SZ", gmtime()) }
+                self.client.publish('%s/%s/command' %  (self.config.device_model, self.config.device_username), json.dumps(payload))   
+            except:
+                self.log.error('!! Error sending request-current-state to dyson', exc_info=True)
 
 
         async def connect_dyson_mqtt(self):
@@ -244,9 +265,7 @@ class dyson(sofabase):
                 self.client.subscribe('%s/%s/status/software' % (self.config.device_model, self.config.device_username), qos=1)
                 self.client.subscribe('%s/%s/status/connection' % (self.config.device_model, self.config.device_username), qos=1)
                 self.log.info('-> subscribed to %s/%s/status/current' % (self.config.device_model, self.config.device_username))
-               
-                payload = { "msg" : "REQUEST-CURRENT-STATE", "time" : strftime("%Y-%m-%dT%H:%M:%SZ", gmtime()) }
-                self.client.publish('%s/%s/command' %  (self.config.device_model, self.config.device_username), json.dumps(payload))   
+                self.request_current_state()
                 self.log.info('-> published initial request to %s/%s/command' %  (self.config.device_model, self.config.device_username))
             except:
                 self.log.error('!! Error handling mqtt connect to dyson', exc_info=True)
@@ -275,7 +294,7 @@ class dyson(sofabase):
                         if type(working_data['product-state'][item])==list:
                             data['product-state'][item]=data['product-state'][item][1]
                     
-                self.log.info('<- dyson: %s '% data)
+                #self.log.info('<- dyson: %s '% data)
                 data['name']=self.config.device_friendly_name
                 data['product_type']=self.config.device_id.split('-')[4]
                 self.loop.create_task(self.dataset.ingest({'fan': { self.config.device_serial_number : data }}))
@@ -288,8 +307,9 @@ class dyson(sofabase):
         
             try:
                 deviceid=path.split("/")[2]    
+                endpointId="%s:%s:%s" % ("dyson","fan", path.split("/")[2])
                 nativeObject=self.dataset.getObjectFromPath(self.dataset.getObjectPath(path))
-                if nativeObject['name'] not in self.dataset.localDevices and 'data' in nativeObject:
+                if endpointId not in self.dataset.localDevices and 'data' in nativeObject:
                     device=devices.alexaDevice('dyson/fan/%s'  % deviceid, nativeObject['name'], displayCategories=['THERMOSTAT'], adapter=self)
                     device.ThermostatController=dyson.ThermostatController(device=device, supportedModes=["AUTO", "HEAT", "COOL", "OFF"])
                     device.TemperatureSensor=dyson.TemperatureSensor(device=device)
@@ -298,7 +318,7 @@ class dyson(sofabase):
                     device.AirQualityModeController=dyson.AirQualityModeController('Air Quality', device=device, 
                         supportedModes={'Good':'Good', 'Fair':'Fair', 'Poor': 'Poor'})
 
-                    return self.dataset.newaddDevice(device)
+                    return self.dataset.add_device(device)
 
             except:
                 self.log.error('Error adding smart device', exc_info=True)
@@ -332,7 +352,6 @@ class dyson(sofabase):
         
             if device not in self.pendingChanges:
                 self.pendingChanges.append(device)
-                self.log.info('Adding device to pending change')
 
             count=0
             while device in self.pendingChanges and count<30:
