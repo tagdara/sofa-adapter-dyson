@@ -145,7 +145,7 @@ class dyson(sofabase):
 
                 return await self.adapter.setAndUpdate(self.device, command, "ThermostatController", correlationToken)
             except:
-                self.log.error('!! Error during SetThermostatMode', exc_info=True)
+                self.log.error('!! Error during SetThermostatMode: %s' % command, exc_info=True)
                 return None
 
         async def SetTargetTemperature(self, payload, correlationToken='', **kwargs):
@@ -168,14 +168,35 @@ class dyson(sofabase):
                         return ""
                     air_quality=max( int(self.nativeObject['data']['pact']), int(self.nativeObject['data']['vact']))
                     if air_quality>7:
-                        return "Poor"
+                        return "%s.%s" % (self.name, "Poor")
                     if air_quality>3:
-                        return "Fair"
+                        return "%s.%s" % (self.name, "Fair")
                     else:
-                        return "Good"
+                        return "%s.%s" % (self.name, "Good")
             except:
                 self.adapter.log.error('Error checking air quality status: %s' % self.nativeObject, exc_info=True)
             return ""
+
+    class NightModeController(devices.ModeController):
+
+        @property            
+        def mode(self):
+            try:
+                return "%s.%s" % (self.name, self.nativeObject['product-state']['nmod'])
+            except:
+                self.adapter.log.error('!! Error checking night mode status: %s' % self.nativeObject, exc_info=True)
+            return ""
+
+        async def SetMode(self, payload, correlationToken=''):
+            try:
+                if payload['mode'].split('.')[1] in self._supportedModes:
+                    return await self.adapter.setAndUpdate(self.device, { 'nmod' : payload['mode'].split('.')[1]}, "NightModeController", correlationToken)
+                self.log.error('!! error - did not find mode %s' % payload)
+            except:
+                self.adapter.log.error('!! Error setting mode status %s' % payload, exc_info=True)
+            return {}
+
+
 
     class adapterProcess(adapterbase):
     
@@ -315,8 +336,10 @@ class dyson(sofabase):
                     device.TemperatureSensor=dyson.TemperatureSensor(device=device)
                     device.PowerLevelController=dyson.PowerLevelController(device=device)
                     device.EndpointHealth=dyson.EndpointHealth(device=device)
-                    device.AirQualityModeController=dyson.AirQualityModeController('Air Quality', device=device, 
+                    device.AirQualityModeController=dyson.AirQualityModeController('Air Quality', device=device, nonControllable=True,
                         supportedModes={'Good':'Good', 'Fair':'Fair', 'Poor': 'Poor'})
+                    device.NightModeController=dyson.NightModeController('Night Mode', device=device, 
+                        supportedModes={'ON':'On', 'OFF':'Off'})
 
                     return self.dataset.add_device(device)
 
